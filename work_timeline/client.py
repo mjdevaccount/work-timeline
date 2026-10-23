@@ -95,7 +95,8 @@ class TimelineClient:
     """One remote writer. `service` tags every row's attrs and its default `ref`."""
 
     def __init__(self, base_url: str | None, api_key: str | None, *, service: str, kind: str = "job",
-                 timeout_s: float = DEFAULT_TIMEOUT_S, transport: Transport | None = None) -> None:
+                 timeout_s: float = DEFAULT_TIMEOUT_S, transport: Transport | None = None,
+                 headers: dict[str, str] | None = None) -> None:
         if kind not in vocab.KINDS:
             raise ValueError(f"unknown kind {kind!r}; allowed: {sorted(vocab.KINDS)}")
         self._base = (base_url or "").strip().rstrip("/")
@@ -104,6 +105,9 @@ class TimelineClient:
         self.kind = kind
         self.timeout_s = timeout_s
         self._transport = transport or urllib_transport
+        # Extra request headers (a reverse proxy that routes on `Host`, say). The three the
+        # contract needs are set after these, so a caller can add headers but never replace the key.
+        self._headers = dict(headers or {})
 
     @classmethod
     def from_env(cls, *, service: str, base_var: str = BASE_URL_VAR, key_var: str = API_KEY_VAR,
@@ -127,8 +131,8 @@ class TimelineClient:
             body = encode(build())
             code, raw = self._transport(
                 f"{self._base}{path}", body,
-                {contract.API_KEY_HEADER: self._key, "Content-Type": "application/json",
-                 "Accept": "application/json"},
+                {**self._headers, contract.API_KEY_HEADER: self._key,
+                 "Content-Type": "application/json", "Accept": "application/json"},
                 self.timeout_s)
         except Exception as exc:
             # Class name only: a transport error's text can carry the request.

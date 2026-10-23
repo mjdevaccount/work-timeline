@@ -9,7 +9,7 @@ from work_timeline.client import TimelineClient, Unit
 from work_timeline.contract import WorkClose, WorkOpen, WorkRecord
 from work_timeline.vocab import KINDS, LAYERS, STATUSES, TERMINAL, status_for
 
-__version__ = "0.1.1"
+__version__ = "0.2.0"
 
 __all__ = ["KINDS", "LAYERS", "STATUSES", "TERMINAL", "TimelineClient", "Unit", "WorkClose", "WorkOpen",
            "WorkRecord", "status_for"]
