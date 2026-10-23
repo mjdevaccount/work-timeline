@@ -1,6 +1,6 @@
 [project]
 name = "work-timeline"
-version = "0.1.0"
+version = "0.1.1"
 description = "The ops.work contract (closed vocabulary + request models) and the one remote writer for it: open on entry, close on exit, never raises."
 readme = "README.md"
 license = "MIT"
