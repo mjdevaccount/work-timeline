@@ -44,3 +44,10 @@ def test_the_receiver_model_keeps_the_error_and_refuses_an_uncapped_one() -> Non
 
 def test_the_record_path_is_not_under_admin_run() -> None:
     assert not contract.RECORD_PATH.startswith("/admin/run/")
+
+
+def test_the_package_declares_its_types() -> None:
+    """A consumer under `mypy --strict` (finance-ops) rejects an import with no py.typed marker."""
+    from importlib.resources import files
+
+    assert files("work_timeline").joinpath("py.typed").is_file()

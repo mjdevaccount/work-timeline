@@ -33,7 +33,7 @@ inject your own with `transport=`.
 Pinned to a CI-built release wheel (immutable bytes, no git CLI needed):
 
 ```toml
-"work-timeline @ https://github.com/mjdevaccount/work-timeline/releases/download/v0.1.0/work_timeline-0.1.0-py3-none-any.whl"
+"work-timeline @ https://github.com/mjdevaccount/work-timeline/releases/download/v0.1.1/work_timeline-0.1.1-py3-none-any.whl"
 ```
 
 A new kind, layer or status ships to the **receiver first**: it refuses an unknown value with a
