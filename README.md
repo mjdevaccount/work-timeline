@@ -48,7 +48,7 @@ assert sent == ["open", "close"]
 ## Install
 
 ```bash
-pip install "work-timeline @ https://github.com/mjdevaccount/work-timeline/releases/download/v1.0.0/work_timeline-1.0.0-py3-none-any.whl"
+pip install "work-timeline @ https://github.com/mjdevaccount/work-timeline/releases/download/v0.3.0/work_timeline-0.3.0-py3-none-any.whl"
 ```
 
 Each release attaches its wheel to a GitHub release; pin the wheel URL. The only runtime
@@ -64,7 +64,9 @@ if not timeline.configured:
     log.warning("work timeline disabled, missing %s", timeline.missing())
 ```
 
-`from_env(base_var=..., key_var=...)` reads other variable names.
+`from_env(base_var=..., key_var=...)` reads other variable names. The names used before 0.3.0
+are still read when the current ones are unset, with one `FutureWarning`, until 1.0.0
+([`CHANGELOG.md`](CHANGELOG.md)).
 
 ## From a shell script
 
@@ -74,7 +76,7 @@ A caller that is not Python uses the CLI, so its body goes through the same mode
 WORK_TIMELINE_API_KEY="$key" python -m work_timeline record \
   --service ci-runner --kind deploy --name api \
   --started "$started" --ended "$(date -u +%FT%TZ)" --status ok \
-  --attr env=staging --base-url https://timeline.example.com
+  --ref deploys:api --attr env=staging --base-url https://timeline.example.com/api
 ```
 
 `open` prints the new unit's id and `close --id N` finishes it; `--dry-run` prints the body and

@@ -42,6 +42,12 @@ class _Wire:
         return self.code, b'{"id": 41}'
 
 
+@pytest.fixture(autouse=True)
+def _no_deprecated_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in wc.LEGACY_ENV_VARS.values():
+        monkeypatch.delenv(name, raising=False)
+
+
 @pytest.fixture
 def wire(monkeypatch: pytest.MonkeyPatch) -> _Wire:
     w = _Wire()

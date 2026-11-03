@@ -8,7 +8,7 @@ Example:
     WORK_TIMELINE_API_KEY="$key" python -m work_timeline record \
         --service ci-runner --kind deploy --name api \
         --started "$started" --ended "$(date -u +%FT%TZ)" --status ok \
-        --attr env=staging --base-url https://timeline.example.com
+        --ref deploys:api --attr env=staging --base-url https://timeline.example.com/api
     ```
 
 `open` prints the new unit's id and `close --id N` finishes it. `--dry-run` prints the body that
@@ -18,6 +18,9 @@ Invariants:
     The API key is read from the environment variable named by `--key-var` (default
     `WORK_TIMELINE_API_KEY`), never from argv, where other users of the host can read it.
     Rationale: ADR-0006.
+
+    The default variables fall back to their deprecated names (`client.read_env`); reading one
+    prints a one-line warning to stderr that names the variables, never the value.
 
 Exit codes:
     0: Sent and accepted; `open` prints the unit id.
@@ -32,8 +35,8 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
-import os
 import sys
+import warnings
 from typing import Any
 
 from work_timeline import client as _client
@@ -151,8 +154,12 @@ def main(argv: list[str] | None = None) -> int:
     """
     args = _parser().parse_args(argv)
     attrs = _attrs(args)
-    base = args.base_url if args.base_url is not None else os.environ.get(_client.BASE_URL_VAR, "")
-    key = os.environ.get(args.key_var, "")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", FutureWarning)
+        base = args.base_url if args.base_url is not None else _client.read_env(_client.BASE_URL_VAR)
+        key = _client.read_env(args.key_var)
+    for w in caught:
+        print(f"work_timeline: warning: {w.message}", file=sys.stderr)
     if args.dry_run:
         base, key = base or "http://dry-run", key or "dry-run"
     probe = _Probe(_dry if args.dry_run else _client.urllib_transport)

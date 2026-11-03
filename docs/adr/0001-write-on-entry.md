@@ -5,7 +5,7 @@ date: 2026-11-03
 
 # Open a unit when the work starts, close it when the work ends
 
-Decided in 0.1.0 (`open`, `close`, `recorded()`). Recorded in 1.0.0.
+Decided in 0.1.0 (`open`, `close`, `recorded()`). Recorded in 0.3.0.
 
 ## Context and problem statement
 

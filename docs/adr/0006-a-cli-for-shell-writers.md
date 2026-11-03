@@ -5,7 +5,7 @@ date: 2026-11-03
 
 # Shell writers use the package's CLI; the key never rides argv; exit codes name the failure
 
-Decided in 0.2.0 (`python -m work_timeline`). Recorded in 1.0.0.
+Decided in 0.2.0 (`python -m work_timeline`). Recorded in 0.3.0.
 
 ## Context and problem statement
 

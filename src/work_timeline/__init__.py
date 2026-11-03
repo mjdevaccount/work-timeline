@@ -15,7 +15,7 @@ from work_timeline.client import TimelineClient, Unit
 from work_timeline.contract import WorkClose, WorkOpen, WorkRecord
 from work_timeline.vocab import KINDS, LAYERS, STATUSES, TERMINAL, status_for
 
-__version__ = "1.0.0"
+__version__ = "0.3.0"
 
 __all__ = [
     "KINDS",

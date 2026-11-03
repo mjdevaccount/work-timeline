@@ -7,16 +7,14 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
-## [1.0.0] - 2026-11-03
+## [0.3.0] - 2026-11-03
 
 ### Changed
 
-- **Breaking:** the default environment variables are `WORK_TIMELINE_BASE_URL` and
-  `WORK_TIMELINE_API_KEY` (`client.BASE_URL_VAR`, `client.API_KEY_VAR`). They are read by
-  `TimelineClient.from_env()` and by the CLI (`--base-url`'s fallback and `--key-var`'s default).
-  To keep the previous names, pass `base_var=` / `key_var=` to `from_env()`, or `--key-var` to the
-  CLI; both work on 0.2.0 too. A caller that passes `base_url` and `api_key` explicitly is
-  unaffected.
+- The default environment variables are `WORK_TIMELINE_BASE_URL` and `WORK_TIMELINE_API_KEY`
+  (`client.BASE_URL_VAR`, `client.API_KEY_VAR`). They are read by `TimelineClient.from_env()` and
+  by the CLI (`--base-url`'s fallback and `--key-var`'s default). A caller that passes `base_url`
+  and `api_key`, `base_var` / `key_var`, or `--key-var` explicitly reads exactly what it names.
 - The package moved to the `src/` layout. The wheel's contents are unchanged.
 - Every module defines `__all__`; docstrings state the contract in Google style.
 
@@ -28,6 +26,16 @@ All notable changes to this project are documented here. The format is based on
   vocabulary out of the package, `mypy --strict`, a test matrix over Python 3.12 to 3.14 and
   Windows, a build check, and a test that runs the README's Python example.
 - `renovate.json`, extending the shared ci-kit preset.
+- `client.read_env()` and `client.LEGACY_ENV_VARS`: read a default variable, falling back to its
+  deprecated name.
+
+### Deprecated
+
+- The environment variables `TRADE_DATA_BASE_URL` and `TRADE_DATA_API_KEY`. When the new name is
+  unset they are still read, by `from_env()` and by the CLI, with one `FutureWarning` per process
+  per name (the CLI prints it as one `work_timeline: warning:` line on stderr). 1.0.0 stops
+  reading them. To migrate, set the new names, or name the variable explicitly (`key_var=`,
+  `--key-var`), which works on 0.2.0 too.
 
 The wire contract (paths, models, field names, vocabulary) and the CLI's arguments and exit codes
 are unchanged.
@@ -62,8 +70,8 @@ are unchanged.
   `arecorded()`, which open a unit on entry and close it on exit (ADR-0001), never raise
   (ADR-0002), and record a stopped unit as `cancelled` (ADR-0003).
 
-[Unreleased]: https://github.com/mjdevaccount/work-timeline/compare/v1.0.0...HEAD
-[1.0.0]: https://github.com/mjdevaccount/work-timeline/compare/v0.2.0...v1.0.0
+[Unreleased]: https://github.com/mjdevaccount/work-timeline/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/mjdevaccount/work-timeline/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/mjdevaccount/work-timeline/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/mjdevaccount/work-timeline/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/mjdevaccount/work-timeline/releases/tag/v0.1.0
