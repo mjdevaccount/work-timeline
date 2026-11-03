@@ -1,13 +1,35 @@
 [project]
 name = "work-timeline"
-version = "0.2.0"
-description = "The ops.work contract (closed vocabulary + request models) and the one remote writer for it: open on entry, close on exit, never raises."
+version = "1.0.0"
+description = "The contract for a shared work timeline (closed vocabulary + request models) and a remote writer for it: open on entry, close on exit, never raises."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"
+keywords = ["observability", "job-tracking", "timeline", "telemetry", "pydantic", "cli"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Framework :: Pydantic :: 2",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: System :: Monitoring",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
 dependencies = [
     "pydantic>=2.9",
 ]
+
+[project.urls]
+Homepage = "https://github.com/mjdevaccount/work-timeline"
+Repository = "https://github.com/mjdevaccount/work-timeline"
+Issues = "https://github.com/mjdevaccount/work-timeline/issues"
+Changelog = "https://github.com/mjdevaccount/work-timeline/blob/main/CHANGELOG.md"
+Decisions = "https://github.com/mjdevaccount/work-timeline/tree/main/docs/adr"
 
 [build-system]
 requires = ["hatchling"]
@@ -17,16 +39,41 @@ build-backend = "hatchling.build"
 packages = ["src/work_timeline"]
 
 [dependency-groups]
-dev = ["pytest>=8.3", "pytest-asyncio>=0.24", "ruff>=0.15"]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-examples>=0.0.18",
+    "ruff>=0.15",
+    "pre-commit>=4.7",
+]
+# `mypy --strict` over the package (the `types` CI job).
+types = [
+    "mypy>=2.4",
+]
 
 [tool.ruff]
 line-length = 120
 target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "B", "UP", "RUF"]
-ignore = ["E501", "RUF002", "RUF022"]
+select = ["E", "F", "W", "I", "B", "UP", "RUF", "D"]
+# D105/D107: magic methods and `__init__` are documented on the class (Google style).
+ignore = ["E501", "RUF002", "D105", "D107"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+# Docstring rules are for the package; tests and markdown snippets are read as code.
+"tests/**" = ["D"]
+"*.md" = ["D"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.mypy]
+files = ["src"]
+strict = true
+python_version = "3.12"

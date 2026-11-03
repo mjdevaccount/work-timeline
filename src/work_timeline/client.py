@@ -1,26 +1,25 @@
-"""Put a unit of work on the shared timeline from outside the receiving process.
+"""`TimelineClient`: record units of work on a remote timeline receiver over HTTP.
 
-THE RULES THIS CLIENT EXISTS TO HOLD, each one learned from a copy that broke it:
+Invariants:
+    Write on entry. `recorded()` opens a `running` unit before the block runs and closes it
+    afterwards, so a process killed mid-block leaves a unit that is still `running`. If the open
+    is not accepted, the close becomes one completion write. Rationale: ADR-0001.
 
-* WRITE ON ENTRY. `recorded()` opens a `running` row before the work starts and closes it after,
-  so a process killed mid-run (OOM, SIGKILL, a reboot) leaves a row with an old `started_at`,
-  which is exactly the shape of "this died". A writer that posts only on completion makes "it
-  never ran" and "it died" the same absence. If the open fails, the close falls back to one
-  completion write, so adopting open/close can never lose a row the old path would have kept.
-* NEVER RAISES, NEVER BLOCKS LONG. Observation must not break the work it observes: every call
-  is bounded by `timeout_s` (a wedged endpoint does not raise, it BLOCKS) and swallows every
-  failure into a `False`/`None` and one log line. Not retried: a row a few seconds late is
-  worth nothing, and a retry spends the job's wall-clock on telemetry.
-* CANCELLED IS NOT FAILED (`vocab.status_for`).
-* SERIALISATION IS INSIDE THE GUARD. `recorded()` closes from a `finally`, so an exception
-  escaping the write would REPLACE the job's real exception. Non-JSON attrs (a Decimal) are
-  sent as strings rather than costing the row.
-* INERT, NOT HALF-WIRED. With no base URL or no key every call is a no-op returning
-  `False`/`None`; `configured` says which, so the caller can log it once at startup.
-* THE KEY IS NEVER LOGGED. Only the request path is.
+    Never raises. Every call is bounded by `timeout_s`, is not retried, and reports failure as
+    `False` or `None` plus one log line. Serialisation happens inside that guard, so a value that
+    cannot be encoded costs the unit, never the caller's own exception. Rationale: ADR-0002.
 
-Transport is stdlib urllib so a consumer grows no runtime dependency for two POSTs; tests and
-callers inject their own with `transport=`. The async methods run the same call on a thread.
+    Cancelled is not failed (`vocab.status_for`). Rationale: ADR-0003.
+
+    Inert when unconfigured. With no base URL or no API key every call is a no-op; `configured`
+    and `missing()` say so, for one log line at startup.
+
+    The API key is never logged. A log line names the request path, the outcome and, for a
+    transport error, the exception class only.
+
+The default transport is the standard library's `urllib`, so the package adds no HTTP
+dependency; pass `transport=` to use another client or a test double. The async context manager
+runs each write on a worker thread.
 """
 
 from __future__ import annotations
@@ -40,18 +39,46 @@ from pydantic import BaseModel
 
 from work_timeline import contract, vocab
 
+__all__ = [
+    "API_KEY_VAR",
+    "BASE_URL_VAR",
+    "DEFAULT_TIMEOUT_S",
+    "TimelineClient",
+    "Transport",
+    "Unit",
+    "encode",
+    "urllib_transport",
+]
+
 log = logging.getLogger(__name__)
 
-#: (url, body, headers, timeout_s) -> (http_status, response_body). Never sees an exception it
-#: should hide: the client wraps the call.
+#: `(url, body, headers, timeout_s) -> (http_status, response_body)`. A transport may raise; the
+#: client catches it.
 Transport = Callable[[str, bytes, dict[str, str], float], tuple[int, bytes]]
 
+#: Default bound on each request, in seconds.
 DEFAULT_TIMEOUT_S = 4.0
-BASE_URL_VAR = "TRADE_DATA_BASE_URL"
-API_KEY_VAR = "TRADE_DATA_API_KEY"
+#: Environment variable `TimelineClient.from_env` and the CLI read the receiver's base URL from.
+BASE_URL_VAR = "WORK_TIMELINE_BASE_URL"
+#: Environment variable `TimelineClient.from_env` and the CLI read the API key from.
+API_KEY_VAR = "WORK_TIMELINE_API_KEY"
 
 
 def urllib_transport(url: str, body: bytes, headers: dict[str, str], timeout_s: float) -> tuple[int, bytes]:
+    """POST `body` to `url` with the standard library.
+
+    Args:
+        url: The full request URL.
+        body: The JSON request body.
+        headers: Request headers.
+        timeout_s: Socket timeout, in seconds.
+
+    Returns:
+        The HTTP status and the response body. An HTTP error status is returned, not raised.
+
+    Raises:
+        OSError: When no response arrives (connection refused, DNS failure, timeout).
+    """
     req = urllib.request.Request(url, data=body, method="POST", headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout_s) as resp:
@@ -65,15 +92,31 @@ def _default(o: Any) -> Any:
 
 
 def encode(model: BaseModel) -> bytes:
-    """The wire bytes for one contract model. Datetimes as ISO 8601; anything else non-JSON as str."""
+    """Serialise a contract model to its wire bytes.
+
+    Args:
+        model: A `WorkOpen`, `WorkClose` or `WorkRecord`.
+
+    Returns:
+        Compact JSON. Datetimes are ISO 8601; any other value JSON cannot hold (a `Decimal`, say)
+        is sent as its `str()`.
+
+    Raises:
+        Exception: Whatever a value's `__str__` raises. `TimelineClient` catches it.
+    """
     return json.dumps(model.model_dump(mode="python"), separators=(",", ":"), default=_default).encode()
 
 
 class Unit(dict[str, Any]):
-    """The attrs dict `recorded()` yields, plus an outcome the body can set without raising.
+    """The attributes dict that `recorded()` yields, plus an outcome the block can set.
 
-    An exception always wins (it is what actually happened); otherwise `fail()` or a 4xx/5xx
-    from `mark_http()` makes the unit `failed`.
+    Keys set on it are sent as the unit's attributes when it closes. An exception raised by the
+    block always decides the status; without one, `fail()` or a `mark_http()` of 400 or above
+    makes the unit `failed`.
+
+    Attributes:
+        status: The status the block set, or None.
+        error: The error text the block set, or None.
     """
 
     def __init__(self, *a: Any, **kw: Any) -> None:
@@ -82,21 +125,55 @@ class Unit(dict[str, Any]):
         self.error: str | None = None
 
     def fail(self, error: str | None = None) -> None:
+        """Mark the unit `failed` without raising.
+
+        Args:
+            error: Error text, cut to `vocab.ERROR_MAX` characters.
+        """
         self.status = "failed"
         self.error = error[: vocab.ERROR_MAX] if error else None
 
     def mark_http(self, status_code: int | None) -> None:
+        """Record an HTTP status as the attribute `http_status`; 400 or above fails the unit.
+
+        Args:
+            status_code: The HTTP status the work ended with.
+        """
         self["http_status"] = status_code
         if vocab.status_for(None, status_code) == "failed":
             self.fail(f"HTTP {status_code}")
 
 
 class TimelineClient:
-    """One remote writer. `service` tags every row's attrs and its default `ref`."""
+    """A writer that records units of work on a remote timeline receiver.
 
-    def __init__(self, base_url: str | None, api_key: str | None, *, service: str, kind: str = "job",
-                 timeout_s: float = DEFAULT_TIMEOUT_S, transport: Transport | None = None,
-                 headers: dict[str, str] | None = None) -> None:
+    Every unit's attributes carry `service`, and its `ref` defaults to `"<service>:<name>"`.
+
+    Args:
+        base_url: The receiver's base URL; the contract paths are appended to it.
+        api_key: The key sent in `contract.API_KEY_HEADER`.
+        service: The writer's name, for example `ci-runner`.
+        kind: The default kind, one of `vocab.KINDS`.
+        timeout_s: Bound on each request, in seconds.
+        transport: The HTTP transport; `urllib_transport` when None.
+        headers: Extra request headers, such as a `Host` header for a reverse proxy. The API key,
+            `Content-Type` and `Accept` headers are set after these and cannot be replaced.
+
+    Raises:
+        ValueError: When `kind` is not in `vocab.KINDS`.
+    """
+
+    def __init__(
+        self,
+        base_url: str | None,
+        api_key: str | None,
+        *,
+        service: str,
+        kind: str = "job",
+        timeout_s: float = DEFAULT_TIMEOUT_S,
+        transport: Transport | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         if kind not in vocab.KINDS:
             raise ValueError(f"unknown kind {kind!r}; allowed: {sorted(vocab.KINDS)}")
         self._base = (base_url or "").strip().rstrip("/")
@@ -105,21 +182,36 @@ class TimelineClient:
         self.kind = kind
         self.timeout_s = timeout_s
         self._transport = transport or urllib_transport
-        # Extra request headers (a reverse proxy that routes on `Host`, say). The three the
-        # contract needs are set after these, so a caller can add headers but never replace the key.
         self._headers = dict(headers or {})
 
     @classmethod
-    def from_env(cls, *, service: str, base_var: str = BASE_URL_VAR, key_var: str = API_KEY_VAR,
-                 **kw: Any) -> TimelineClient:
+    def from_env(
+        cls, *, service: str, base_var: str = BASE_URL_VAR, key_var: str = API_KEY_VAR, **kw: Any
+    ) -> TimelineClient:
+        """Build a client from environment variables.
+
+        Args:
+            service: The writer's name.
+            base_var: The variable holding the base URL.
+            key_var: The variable holding the API key.
+            **kw: Passed to the constructor.
+
+        Returns:
+            A client, inert if either variable is unset or empty.
+        """
         return cls(os.environ.get(base_var), os.environ.get(key_var), service=service, **kw)
 
     @property
     def configured(self) -> bool:
+        """Whether both a base URL and an API key are set."""
         return bool(self._base and self._key)
 
     def missing(self) -> list[str]:
-        """Which half is absent, for a caller's one startup log line."""
+        """Name the settings that are absent.
+
+        Returns:
+            A subset of `["base_url", "api_key"]`; empty when the client is configured.
+        """
         return [n for n, v in (("base_url", self._base), ("api_key", self._key)) if not v]
 
     # -- the three calls ----------------------------------------------------------------------
@@ -130,14 +222,21 @@ class TimelineClient:
         try:
             body = encode(build())
             code, raw = self._transport(
-                f"{self._base}{path}", body,
-                {**self._headers, contract.API_KEY_HEADER: self._key,
-                 "Content-Type": "application/json", "Accept": "application/json"},
-                self.timeout_s)
+                f"{self._base}{path}",
+                body,
+                {
+                    **self._headers,
+                    contract.API_KEY_HEADER: self._key,
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
+                self.timeout_s,
+            )
         except Exception as exc:
-            # Class name only: a transport error's text can carry the request.
-            log.warning("work timeline unreachable (%s) - %s not written; the work is unaffected",
-                        type(exc).__name__, what)
+            # The class name only: a transport error's text can carry the request.
+            log.warning(
+                "work timeline unreachable (%s) - %s not written; the work is unaffected", type(exc).__name__, what
+            )
             return None
         if code >= 400:
             log.warning("work timeline rejected %s at %s: http %s", what, path, code)
@@ -147,12 +246,42 @@ class TimelineClient:
     def _attrs(self, attrs: dict[str, Any] | None) -> dict[str, Any]:
         return {"service": self.service, **(attrs or {})}
 
-    def open(self, name: str, *, started_at: dt.datetime, kind: str | None = None, ref: str | None = None,
-             attrs: dict[str, Any] | None = None, layer: str = "process") -> int | None:
-        """Open a `running` row; its id, or None when the timeline could not take it."""
-        got = self._post(contract.OPEN_PATH, lambda: contract.WorkOpen(
-            kind=kind or self.kind, name=name, started_at=started_at, layer=layer,
-            ref=ref or f"{self.service}:{name}", attrs=self._attrs(attrs)), f"open {name}")
+    def open(
+        self,
+        name: str,
+        *,
+        started_at: dt.datetime,
+        kind: str | None = None,
+        ref: str | None = None,
+        attrs: dict[str, Any] | None = None,
+        layer: str = "process",
+    ) -> int | None:
+        """Open a `running` unit.
+
+        Args:
+            name: What is running.
+            started_at: When it started; timezone-aware.
+            kind: One of `vocab.KINDS`; the client's default when None.
+            ref: A stable reference; `"<service>:<name>"` when None.
+            attrs: Attributes to send.
+            layer: One of `vocab.LAYERS`.
+
+        Returns:
+            The unit's id, or None when the client is inert, the receiver did not accept the
+            open, or its reply carried no integer `id`. Never raises.
+        """
+        got = self._post(
+            contract.OPEN_PATH,
+            lambda: contract.WorkOpen(
+                kind=kind or self.kind,
+                name=name,
+                started_at=started_at,
+                layer=layer,
+                ref=ref or f"{self.service}:{name}",
+                attrs=self._attrs(attrs),
+            ),
+            f"open {name}",
+        )
         if got is None:
             return None
         try:
@@ -161,24 +290,92 @@ class TimelineClient:
             return None
         return wid if isinstance(wid, int) else None
 
-    def close(self, work_id: int, *, ended_at: dt.datetime, status: str, error: str | None = None,
-              attrs: dict[str, Any] | None = None) -> bool:
-        """Close a row from `open`. A 404 is the receiver saying nothing was updated: the row
-        stays `running`, which is the honest record, and nothing is re-sent."""
-        return self._post(contract.CLOSE_PATH, lambda: contract.WorkClose(
-            id=work_id, ended_at=ended_at, status=vocab.terminal(status),
-            error=error[: vocab.ERROR_MAX] if error else None, attrs=self._attrs(attrs)),
-            f"close {work_id}") is not None
+    def close(
+        self,
+        work_id: int,
+        *,
+        ended_at: dt.datetime,
+        status: str,
+        error: str | None = None,
+        attrs: dict[str, Any] | None = None,
+    ) -> bool:
+        """Close a unit returned by `open`.
 
-    def record(self, name: str, *, started_at: dt.datetime, ended_at: dt.datetime, status: str,
-               kind: str | None = None, ref: str | None = None, error: str | None = None,
-               attrs: dict[str, Any] | None = None, layer: str = "process") -> bool:
-        """One FINISHED unit in a single write; whether it landed."""
-        return self._post(contract.RECORD_PATH, lambda: contract.WorkRecord(
-            kind=kind or self.kind, name=name, started_at=started_at, ended_at=ended_at,
-            status=vocab.terminal(status), ref=ref or f"{self.service}:{name}",
-            error=error[: vocab.ERROR_MAX] if error else None, attrs=self._attrs(attrs), layer=layer),
-            f"record {name}") is not None
+        A refused close is not re-sent in any form: the unit stays `running` on the receiver,
+        which is the accurate record of what the receiver knows.
+
+        Args:
+            work_id: The id `open` returned.
+            ended_at: When the work ended; timezone-aware.
+            status: The outcome, coerced with `vocab.terminal`.
+            error: Error text, cut to `vocab.ERROR_MAX` characters.
+            attrs: Attributes to send.
+
+        Returns:
+            Whether the receiver accepted the close. Never raises.
+        """
+        return (
+            self._post(
+                contract.CLOSE_PATH,
+                lambda: contract.WorkClose(
+                    id=work_id,
+                    ended_at=ended_at,
+                    status=vocab.terminal(status),
+                    error=error[: vocab.ERROR_MAX] if error else None,
+                    attrs=self._attrs(attrs),
+                ),
+                f"close {work_id}",
+            )
+            is not None
+        )
+
+    def record(
+        self,
+        name: str,
+        *,
+        started_at: dt.datetime,
+        ended_at: dt.datetime,
+        status: str,
+        kind: str | None = None,
+        ref: str | None = None,
+        error: str | None = None,
+        attrs: dict[str, Any] | None = None,
+        layer: str = "process",
+    ) -> bool:
+        """Record one finished unit in a single write.
+
+        Args:
+            name: What ran.
+            started_at: When it started; timezone-aware.
+            ended_at: When it ended; timezone-aware.
+            status: The outcome, coerced with `vocab.terminal`.
+            kind: One of `vocab.KINDS`; the client's default when None.
+            ref: A stable reference; `"<service>:<name>"` when None.
+            error: Error text, cut to `vocab.ERROR_MAX` characters.
+            attrs: Attributes to send.
+            layer: One of `vocab.LAYERS`.
+
+        Returns:
+            Whether the receiver accepted the unit. Never raises.
+        """
+        return (
+            self._post(
+                contract.RECORD_PATH,
+                lambda: contract.WorkRecord(
+                    kind=kind or self.kind,
+                    name=name,
+                    started_at=started_at,
+                    ended_at=ended_at,
+                    status=vocab.terminal(status),
+                    ref=ref or f"{self.service}:{name}",
+                    error=error[: vocab.ERROR_MAX] if error else None,
+                    attrs=self._attrs(attrs),
+                    layer=layer,
+                ),
+                f"record {name}",
+            )
+            is not None
+        )
 
     # -- around a block ------------------------------------------------------------------------
 
@@ -188,22 +385,42 @@ class TimelineClient:
             return vocab.status_for(exc), vocab.error_text(exc)
         return (unit.status or "ok"), unit.error
 
-    def _finish(self, name: str, kind: str | None, wid: int | None, started: dt.datetime,
-                unit: Unit, exc: BaseException | None) -> None:
+    def _finish(
+        self,
+        name: str,
+        kind: str | None,
+        wid: int | None,
+        started: dt.datetime,
+        unit: Unit,
+        exc: BaseException | None,
+    ) -> None:
         status, err = self._outcome(unit, exc)
         ended = dt.datetime.now(dt.UTC)
         if wid is not None:
             self.close(wid, ended_at=ended, status=status, error=err, attrs=dict(unit))
         else:
-            self.record(name, kind=kind, started_at=started, ended_at=ended, status=status, error=err,
-                        attrs=dict(unit))
+            self.record(name, kind=kind, started_at=started, ended_at=ended, status=status, error=err, attrs=dict(unit))
 
     @contextlib.contextmanager
     def recorded(self, name: str, *, kind: str | None = None, **attrs: Any) -> Iterator[Unit]:
-        """Record the block: open on entry, close on exit, completion write if the open failed.
+        """Record the enclosed block as one unit: open on entry, close on exit.
 
-            with client.recorded("bank_sync", provider="simplefin") as w:
-                w["txns"] = do_the_sync()
+        If the open is not accepted, the exit sends one completion write instead. An exception
+        from the block is recorded and re-raised unchanged.
+
+        Example:
+            ```python
+            with client.recorded("nightly-build", branch="main") as unit:
+                unit["artifacts"] = build()
+            ```
+
+        Args:
+            name: What runs.
+            kind: One of `vocab.KINDS`; the client's default when None.
+            **attrs: Initial attributes.
+
+        Yields:
+            A `Unit`: set keys on it to send them as attributes, or call `fail()` / `mark_http()`.
         """
         started = dt.datetime.now(dt.UTC)
         unit = Unit(attrs)
@@ -211,7 +428,7 @@ class TimelineClient:
         exc: BaseException | None = None
         try:
             yield unit
-        except BaseException as e:      # re-raised; caught only to record the outcome
+        except BaseException as e:  # re-raised; caught only to record the outcome
             exc = e
             raise
         finally:
@@ -219,7 +436,16 @@ class TimelineClient:
 
     @contextlib.asynccontextmanager
     async def arecorded(self, name: str, *, kind: str | None = None, **attrs: Any) -> AsyncIterator[Unit]:
-        """`recorded` for async code; each write runs on a thread so the loop never blocks on it."""
+        """Async form of `recorded`. Each write runs on a worker thread, so the event loop never waits on it.
+
+        Args:
+            name: What runs.
+            kind: One of `vocab.KINDS`; the client's default when None.
+            **attrs: Initial attributes.
+
+        Yields:
+            A `Unit`, as `recorded` does.
+        """
         started = dt.datetime.now(dt.UTC)
         unit = Unit(attrs)
         wid = await asyncio.to_thread(self.open, name, kind=kind, started_at=started, attrs=dict(unit))

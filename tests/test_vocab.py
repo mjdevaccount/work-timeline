@@ -14,18 +14,29 @@ def test_terminal_is_derived_from_statuses() -> None:
     assert vocab.RUNNING in vocab.STATUSES and vocab.RUNNING not in vocab.TERMINAL
 
 
-@pytest.mark.parametrize(("exc", "http", "want"), [
-    (None, None, "ok"), (None, 200, "ok"), (None, 399, "ok"), (None, 400, "failed"), (None, 503, "failed"),
-    (ValueError(), None, "failed"), (ValueError(), 200, "failed"),
-    (asyncio.CancelledError(), None, "cancelled"), (KeyboardInterrupt(), 500, "cancelled"),
-    (SystemExit(1), None, "cancelled"),
-])
+@pytest.mark.parametrize(
+    ("exc", "http", "want"),
+    [
+        (None, None, "ok"),
+        (None, 200, "ok"),
+        (None, 399, "ok"),
+        (None, 400, "failed"),
+        (None, 503, "failed"),
+        (ValueError(), None, "failed"),
+        (ValueError(), 200, "failed"),
+        (asyncio.CancelledError(), None, "cancelled"),
+        (KeyboardInterrupt(), 500, "cancelled"),
+        (SystemExit(1), None, "cancelled"),
+    ],
+)
 def test_status_for(exc: BaseException | None, http: int | None, want: str) -> None:
     assert vocab.status_for(exc, http) == want
 
 
-@pytest.mark.parametrize(("got", "want"), [("ok", "ok"), ("cancelled", "cancelled"), ("success", "failed"),
-                                           ("running", "failed"), ("", "failed")])
+@pytest.mark.parametrize(
+    ("got", "want"),
+    [("ok", "ok"), ("cancelled", "cancelled"), ("success", "failed"), ("running", "failed"), ("", "failed")],
+)
 def test_terminal_coercion_is_conservative(got: str, want: str) -> None:
     assert vocab.terminal(got) == want
 
@@ -36,7 +47,7 @@ def test_error_text_is_capped() -> None:
 
 
 def test_the_receiver_model_keeps_the_error_and_refuses_an_uncapped_one() -> None:
-    t = dt.datetime(2026, 10, 23, tzinfo=dt.UTC)
+    t = dt.datetime(2030, 1, 1, tzinfo=dt.UTC)
     assert contract.WorkRecord(kind="job", name="x", started_at=t, ended_at=t, error="why").error == "why"
     with pytest.raises(ValidationError):
         contract.WorkRecord(kind="job", name="x", started_at=t, ended_at=t, error="x" * (vocab.ERROR_MAX + 1))
@@ -47,7 +58,7 @@ def test_the_record_path_is_not_under_admin_run() -> None:
 
 
 def test_the_package_declares_its_types() -> None:
-    """A consumer under `mypy --strict` (finance-ops) rejects an import with no py.typed marker."""
+    """A consumer under `mypy --strict` rejects an import from a package with no py.typed marker."""
     from importlib.resources import files
 
     assert files("work_timeline").joinpath("py.typed").is_file()
