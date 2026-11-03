@@ -32,6 +32,7 @@ import logging
 import os
 import urllib.error
 import urllib.request
+import warnings
 from collections.abc import AsyncIterator, Callable, Iterator
 from typing import Any
 
@@ -43,10 +44,12 @@ __all__ = [
     "API_KEY_VAR",
     "BASE_URL_VAR",
     "DEFAULT_TIMEOUT_S",
+    "LEGACY_ENV_VARS",
     "TimelineClient",
     "Transport",
     "Unit",
     "encode",
+    "read_env",
     "urllib_transport",
 ]
 
@@ -62,6 +65,43 @@ DEFAULT_TIMEOUT_S = 4.0
 BASE_URL_VAR = "WORK_TIMELINE_BASE_URL"
 #: Environment variable `TimelineClient.from_env` and the CLI read the API key from.
 API_KEY_VAR = "WORK_TIMELINE_API_KEY"
+#: Deprecated names, still read when the current name is unset, with a `FutureWarning` once per
+#: process per name. They will stop being read in 1.0.0.
+LEGACY_ENV_VARS: dict[str, str] = {
+    BASE_URL_VAR: "TRADE_DATA_BASE_URL",
+    API_KEY_VAR: "TRADE_DATA_API_KEY",
+}
+
+_warned: set[str] = set()
+
+
+def read_env(name: str) -> str:
+    """Read an environment variable, falling back to its deprecated name.
+
+    Args:
+        name: The variable to read, for example `API_KEY_VAR`.
+
+    Returns:
+        The value of `name` when it is set and not empty; otherwise the value of its entry in
+        `LEGACY_ENV_VARS`, if any; otherwise an empty string.
+
+    Invariants:
+        Reading a deprecated name emits one `FutureWarning` per process for that name. The
+        warning names both variables and never the value.
+    """
+    value = os.environ.get(name, "")
+    legacy = LEGACY_ENV_VARS.get(name)
+    if value or legacy is None:
+        return value
+    value = os.environ.get(legacy, "")
+    if value and legacy not in _warned:
+        _warned.add(legacy)
+        warnings.warn(
+            f"{legacy} is deprecated and will stop being read in work-timeline 1.0.0; set {name} instead",
+            FutureWarning,
+            stacklevel=2,
+        )
+    return value
 
 
 def urllib_transport(url: str, body: bytes, headers: dict[str, str], timeout_s: float) -> tuple[int, bytes]:
@@ -192,14 +232,15 @@ class TimelineClient:
 
         Args:
             service: The writer's name.
-            base_var: The variable holding the base URL.
-            key_var: The variable holding the API key.
+            base_var: The variable holding the base URL. The default also falls back to its
+                deprecated name (`read_env`).
+            key_var: The variable holding the API key; falls back as `base_var` does.
             **kw: Passed to the constructor.
 
         Returns:
             A client, inert if either variable is unset or empty.
         """
-        return cls(os.environ.get(base_var), os.environ.get(key_var), service=service, **kw)
+        return cls(read_env(base_var), read_env(key_var), service=service, **kw)
 
     @property
     def configured(self) -> bool:

@@ -5,7 +5,7 @@ date: 2026-11-03
 
 # A stopped unit is `cancelled`, not `failed`
 
-Decided in 0.1.0 (`vocab.status_for`). Recorded in 1.0.0.
+Decided in 0.1.0 (`vocab.status_for`). Recorded in 0.3.0.
 
 ## Context and problem statement
 

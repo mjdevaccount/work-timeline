@@ -5,7 +5,7 @@ date: 2026-11-03
 
 # The writer never raises, is bounded by a timeout, and does not retry
 
-Decided in 0.1.0. Recorded in 1.0.0.
+Decided in 0.1.0. Recorded in 0.3.0.
 
 ## Context and problem statement
 

@@ -5,7 +5,7 @@ date: 2026-11-03
 
 # Kinds, layers and statuses are closed sets; a new value ships to the receiver first
 
-Decided in 0.1.0 (`work_timeline.vocab`). Recorded in 1.0.0.
+Decided in 0.1.0 (`work_timeline.vocab`). Recorded in 0.3.0.
 
 ## Context and problem statement
 

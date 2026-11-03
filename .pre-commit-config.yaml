@@ -4,12 +4,13 @@ repos:
     hooks:
       # The package, its tests and its docs describe a generic library. Deployment detail (the
       # systems that use it, their hosts, incident dates) does not belong in them: what changed goes
-      # in CHANGELOG.md and why in docs/adr/ (CONTRIBUTING.md).
+      # in CHANGELOG.md and why in docs/adr/ (CONTRIBUTING.md). The lookahead admits the two
+      # deprecated environment-variable names (`client.LEGACY_ENV_VARS`) until 1.0.0 drops them.
       - id: no-deployment-vocabulary
         name: no deployment vocabulary
         language: pygrep
         args: [--ignore-case]
-        entry: '\bedge\b|edge[-_]host|\bbox\b|trade|tradier|\bspy\b|\btickers?\b|\bmarkets?\b|finance|quant|\b(?:10|192\.168)\.\d+\.\d+\.\d+\b'
+        entry: '\bedge\b|edge[-_]host|\bbox\b|trade(?!_data_(?:base_url|api_key)\b)|tradier|\bspy\b|\btickers?\b|\bmarkets?\b|finance|quant|\b(?:10|192\.168)\.\d+\.\d+\.\d+\b'
         files: ^(src/|tests/|docs/|README\.md$|CLAUDE\.md$|CONTRIBUTING\.md$|CHANGELOG\.md$)
       # Dated history belongs in CHANGELOG.md and the ADRs, never in a docstring or comment.
       - id: no-dates-in-package

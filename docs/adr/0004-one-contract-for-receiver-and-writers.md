@@ -5,7 +5,7 @@ date: 2026-11-03
 
 # The receiver validates with, and every writer builds through, the same models
 
-Decided in 0.1.0 (`work_timeline.contract`). Recorded in 1.0.0.
+Decided in 0.1.0 (`work_timeline.contract`). Recorded in 0.3.0.
 
 ## Context and problem statement
 

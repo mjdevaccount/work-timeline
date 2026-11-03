@@ -4,7 +4,7 @@ Why the package is shaped the way it is, with the evidence that decided it. Each
 [MADR 4](https://adr.github.io/madr/). Docstrings state the contract and point here with
 `Rationale: ADR-NNNN.`; what changed release by release is in [`CHANGELOG.md`](../../CHANGELOG.md).
 
-The first six were recorded together in 1.0.0, after the fact: each decision shipped earlier, and
+The first six were recorded together in 0.3.0, after the fact: each decision shipped earlier, and
 its reasoning lived in docstrings until then. The release that made each decision is named in its
 record.
 
