@@ -1,54 +1,74 @@
-"""The `ops.work` vocabulary, owned in ONE place for the receiver and every writer.
+"""The closed vocabulary of a work unit: its kinds, layers and statuses, and the outcome mapping.
 
-Before this package, trade-data held the vocabulary and three writers (trade-quant,
-finance-ops, edge-host) each re-typed the subset they used. Two drifts came out of that:
-edge-host posted `success`, which the receiver refused while `failed` happened to overlap; and
-every writer collapsed `cancelled` into `failed`, so a routine deploy painted the timeline red.
+The receiver and every writer import these values from here, so a value cannot be spelled two
+ways. Each set is closed: the receiver refuses a value outside it with a 422 that names the
+allowed set.
 
-trade-data pins `STATUSES` against the live `work_status_known` CHECK (mig268) in its
-integration suite, so this tuple cannot drift from the schema either.
+Rationale: ADR-0003 (cancelled is not failed), ADR-0005 (a closed vocabulary, receiver first).
 """
 
 from __future__ import annotations
 
 import asyncio
 
-#: What sort of work. CLOSED: the day view groups by it, so a typo would quietly create a
-#: category. Adding one is a deliberate edit here plus a receiver deploy before any writer uses it.
-KINDS: frozenset[str] = frozenset({
-    "job",      # a queued unit or an /admin/run/* request: scheduled work
-    "scan",     # one strategy scan cycle over a symbol
-    "stream",   # one streamer process run
-    "daemon",   # one daemon process run
-    "deploy",   # one deploy, recorded from the host
-})
+__all__ = [
+    "CANCEL_EXCEPTIONS",
+    "ERROR_MAX",
+    "KINDS",
+    "LAYERS",
+    "RUNNING",
+    "STATUSES",
+    "TERMINAL",
+    "error_text",
+    "status_for",
+    "terminal",
+]
 
-#: Which tier served the time. Closed for the same reason as KINDS.
+#: What sort of work a unit is. A timeline view groups by kind, so the set is closed: a typo
+#: would otherwise create a new group.
+KINDS: frozenset[str] = frozenset(
+    {
+        "job",  # a scheduled or queued unit of work: a cron run, a batch step, an HTTP-triggered task
+        "scan",  # one pass of a periodic scan over a set of targets
+        "stream",  # one run of a long-lived stream consumer
+        "daemon",  # one run of a long-lived worker process
+        "deploy",  # one deployment, recorded by the deploying host
+    }
+)
+
+#: Which tier of the writer spent the time.
 LAYERS: tuple[str, ...] = ("process", "usecase", "repo", "external")
 
-#: Every value `ops.work.status` can hold.
+#: Every value a unit's status can hold.
 STATUSES: tuple[str, ...] = ("running", "ok", "failed", "cancelled")
 
-#: The one non-terminal value; the schema ties it to `ended_at IS NULL`.
+#: The one non-terminal status. A unit is `running` exactly while it has no end time.
 RUNNING = "running"
 
-#: Every FINISHED value, derived by subtraction so a new status reaches it without a second edit.
+#: Every finished status, derived from `STATUSES` so a new status reaches it without a second edit.
 TERMINAL: tuple[str, ...] = tuple(s for s in STATUSES if s != RUNNING)
 
-#: The cap on an error message, applied by the receiver's model AND by the client.
+#: The maximum length of a unit's error text, enforced by the contract models and the client.
 ERROR_MAX = 500
 
-#: Exceptions that mean the work was STOPPED, not that it failed. A deploy that stops a job
-#: mid-run is the estate's most common event; recording it as `failed` makes red mean nothing.
-CANCEL_EXCEPTIONS: tuple[type[BaseException], ...] = (
-    asyncio.CancelledError, KeyboardInterrupt, SystemExit)
+#: Exceptions that mean the work was stopped rather than that it failed.
+CANCEL_EXCEPTIONS: tuple[type[BaseException], ...] = (asyncio.CancelledError, KeyboardInterrupt, SystemExit)
 
 
 def status_for(exc: BaseException | None = None, http_status: int | None = None) -> str:
-    """Translate an outcome into the closed set at the boundary.
+    """Map an outcome onto a terminal status.
 
-    Cancelled before failed (CancelledError is a BaseException, so a broad handler would
-    swallow it into `failed`); an HTTP 4xx/5xx with no exception is `failed`; else `ok`.
+    Args:
+        exc: The exception the work ended with, if any.
+        http_status: The HTTP status the work ended with, if it was a request.
+
+    Returns:
+        `cancelled` for any of `CANCEL_EXCEPTIONS`; `failed` for any other exception, or for an
+        HTTP status of 400 or above; otherwise `ok`.
+
+    Invariants:
+        Cancellation is checked first: `asyncio.CancelledError` derives from `BaseException`, so a
+        broad handler would otherwise report a stopped unit as `failed`. Rationale: ADR-0003.
     """
     if isinstance(exc, CANCEL_EXCEPTIONS):
         return "cancelled"
@@ -60,11 +80,25 @@ def status_for(exc: BaseException | None = None, http_status: int | None = None)
 
 
 def terminal(status: str) -> str:
-    """A caller's status coerced onto TERMINAL. An unknown value maps to the CONSERVATIVE
-    member, `failed`, never to an invented state (`success` once 500'd the receiver)."""
+    """Coerce a caller's status onto `TERMINAL`.
+
+    Args:
+        status: A status word supplied by the caller.
+
+    Returns:
+        `status` when it is in `TERMINAL`; otherwise `failed`, the conservative member. An
+        unknown word never passes through as a new state.
+    """
     return status if status in TERMINAL else "failed"
 
 
 def error_text(exc: BaseException) -> str:
-    """`Type: message`, capped. A row is read in a list view; an error is a message, not a payload."""
+    """Render an exception as one capped line of error text.
+
+    Args:
+        exc: The exception to render.
+
+    Returns:
+        `"<TypeName>: <message>"`, cut to `ERROR_MAX` characters.
+    """
     return f"{type(exc).__name__}: {exc}"[:ERROR_MAX]

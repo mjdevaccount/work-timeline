@@ -1,5 +1,12 @@
-# work-timeline's own gate: ruff + the test suite against the locked deps, and gitleaks over history
-# through ci-kit's reusable workflow, called the way every consumer calls it.
+# work-timeline's own gate. Every job starts from `permissions: {}` and grants only what it needs.
+#
+#   lint      ruff check + ruff format --check, pre-commit (the vocabulary and date hooks)
+#   types     mypy --strict over src/
+#   pytest    the locked suite on 3.12 / 3.13 / 3.14 (ubuntu) and 3.13 (windows); it runs the
+#             README's Python block (tests/test_readme.py)
+#   build     sdist + wheel; the wheel installs into a clean venv, imports, and runs its CLI
+#   test      the aggregate: green only when every job above is
+#   gitleaks / dup-code   ci-kit's reusable workflows, called the way every consumer calls them
 name: ci
 
 on:
@@ -8,22 +15,106 @@ on:
   pull_request:
   workflow_dispatch:
 
-permissions:
-  contents: read
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  test:
-    name: test
+  lint:
+    name: lint
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.3.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       - run: uv sync --frozen
-      - name: ruff
-        run: uv run ruff check --output-format=github .
-      - name: tests
-        run: uv run pytest -q
+      - name: ruff check
+        run: uv run --no-sync ruff check --output-format=github .
+      - name: ruff format
+        run: uv run --no-sync ruff format --check .
+      - name: pre-commit
+        run: uv run --no-sync pre-commit run --all-files --show-diff-on-failure
+
+  types:
+    name: types
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - run: uv sync --frozen --group types
+      - name: mypy --strict
+        run: uv run --no-sync mypy
+
+  pytest:
+    name: pytest (${{ matrix.os }}, ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python: ["3.12", "3.13", "3.14"]
+        include:
+          - { os: windows-latest, python: "3.13" }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          python-version: ${{ matrix.python }}
+      - run: uv sync --frozen
+      - name: pytest
+        run: uv run --no-sync pytest -q
+
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - run: uv build
+      # A plain install of the wheel, outside the checkout, so the import cannot reach src/.
+      - name: the wheel installs, imports and runs
+        working-directory: ${{ runner.temp }}
+        run: |
+          uv venv wheel-venv
+          uv pip install --python wheel-venv "$GITHUB_WORKSPACE"/dist/*.whl
+          wheel-venv/bin/python -c "import importlib.resources as r, work_timeline; assert r.files('work_timeline').joinpath('py.typed').is_file(); print(work_timeline.__version__)"
+          wheel-venv/bin/python -m work_timeline record --service ci --name smoke \
+            --started 2030-01-01T00:00:00Z --ended 2030-01-01T00:00:01Z --status ok --dry-run
+
+  # The aggregate check: it fails when any job above fails, so a new leg is covered without
+  # editing branch protection.
+  test:
+    name: test
+    if: always()
+    needs: [lint, types, pytest, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - uses: re-actors/alls-green@b5b5b37504aa4183270bd3d855c52a67f212be35 # v1.3.0
+        with:
+          jobs: ${{ toJSON(needs) }}
 
   gitleaks:
     name: gitleaks (secret scan)
@@ -39,6 +130,8 @@ jobs:
   # tracked files fails; a removed one may re-freeze smaller (`--write-baseline` refuses to grow).
   # Reports as "dup-code / lint".
   dup-code:
+    permissions:
+      contents: read
     uses: mjdevaccount/ci-kit/.github/workflows/dup-code.yml@v1
     with:
       args: --baseline .github/jscpd-baseline.json

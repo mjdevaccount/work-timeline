@@ -12,8 +12,8 @@ import pytest
 from work_timeline import TimelineClient, WorkClose, WorkOpen, WorkRecord, vocab
 from work_timeline.contract import CLOSE_PATH, OPEN_PATH, RECORD_PATH
 
-T0 = dt.datetime(2026, 10, 23, 14, 0, tzinfo=dt.UTC)
-T1 = dt.datetime(2026, 10, 23, 14, 5, tzinfo=dt.UTC)
+T0 = dt.datetime(2030, 1, 1, 12, 0, tzinfo=dt.UTC)
+T1 = dt.datetime(2030, 1, 1, 12, 5, tzinfo=dt.UTC)
 
 
 class Wire:
@@ -22,8 +22,15 @@ class Wire:
 
     MODELS: ClassVar[dict[str, type]] = {OPEN_PATH: WorkOpen, CLOSE_PATH: WorkClose, RECORD_PATH: WorkRecord}
 
-    def __init__(self, *, open_status: int = 200, close_status: int = 200, record_status: int = 200,
-                 raise_on: str | None = None, open_id: Any = 41) -> None:
+    def __init__(
+        self,
+        *,
+        open_status: int = 200,
+        close_status: int = 200,
+        record_status: int = 200,
+        raise_on: str | None = None,
+        open_id: Any = 41,
+    ) -> None:
         self.codes = {OPEN_PATH: open_status, CLOSE_PATH: close_status, RECORD_PATH: record_status}
         self.raise_on = raise_on
         self.open_id = open_id
@@ -31,11 +38,11 @@ class Wire:
 
     def __call__(self, url: str, body: bytes, headers: dict[str, str], timeout_s: float) -> tuple[int, bytes]:
         path = "/" + url.split("/", 3)[3]
-        path = path[path.index("/admin"):]
+        path = path[path.index("/admin") :]
         if self.raise_on == path:
             raise TimeoutError("blackholed")
         payload = json.loads(body)
-        self.MODELS[path](**payload)              # the receiver's own validation
+        self.MODELS[path](**payload)  # the receiver's own validation
         self.calls.append((path, payload, headers, timeout_s))
         reply = {"id": self.open_id} if path == OPEN_PATH else {"ok": True}
         return self.codes[path], json.dumps(reply).encode()
@@ -45,20 +52,20 @@ class Wire:
 
 
 def _client(wire: Wire, **kw: Any) -> TimelineClient:
-    return TimelineClient("http://td.test/api/", "k3y", service="trade-quant", transport=wire, **kw)
+    return TimelineClient("http://timeline.test/api/", "k3y", service="etl-worker", transport=wire, **kw)
 
 
 def test_recorded_opens_on_entry_and_closes_ok() -> None:
     wire = Wire()
-    with _client(wire).recorded("pull_ohlcv", symbols=3) as w:
-        assert wire.paths() == [OPEN_PATH]          # the row exists WHILE the work runs
+    with _client(wire).recorded("nightly_export", tables=3) as w:
+        assert wire.paths() == [OPEN_PATH]  # the row exists WHILE the work runs
         w["rows"] = 120
     assert wire.paths() == [OPEN_PATH, CLOSE_PATH]
     opened, closed = wire.calls[0][1], wire.calls[1][1]
-    assert opened["kind"] == "job" and opened["ref"] == "trade-quant:pull_ohlcv"
-    assert opened["attrs"] == {"service": "trade-quant", "symbols": 3}
+    assert opened["kind"] == "job" and opened["ref"] == "etl-worker:nightly_export"
+    assert opened["attrs"] == {"service": "etl-worker", "tables": 3}
     assert closed["id"] == 41 and closed["status"] == "ok"
-    assert closed["attrs"] == {"service": "trade-quant", "symbols": 3, "rows": 120}
+    assert closed["attrs"] == {"service": "etl-worker", "tables": 3, "rows": 120}
 
 
 def test_the_url_is_joined_once_and_the_key_rides_the_header() -> None:
@@ -70,7 +77,7 @@ def test_the_url_is_joined_once_and_the_key_rides_the_header() -> None:
 
 def test_a_failed_open_falls_back_to_one_completion_write() -> None:
     wire = Wire(raise_on=OPEN_PATH)
-    with _client(wire).recorded("pull_ohlcv"):
+    with _client(wire).recorded("nightly_export"):
         pass
     assert wire.paths() == [RECORD_PATH]
     body = wire.calls[0][1]
@@ -144,7 +151,7 @@ def test_an_unserialisable_attr_costs_the_row_not_the_job() -> None:
     wire = Wire()
     with pytest.raises(ValueError, match="the real one"), _client(wire).recorded("x") as w:
         w["bad"] = Bad()
-        raise ValueError("the real one")              # must NOT be replaced by the write's error
+        raise ValueError("the real one")  # must NOT be replaced by the write's error
 
 
 @pytest.mark.parametrize("code", [401, 404, 422, 500])
@@ -175,9 +182,9 @@ def test_unconfigured_is_inert(base: str | None, key: str | None) -> None:
 
 
 def test_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("TRADE_DATA_BASE_URL", "http://td.test")
-    monkeypatch.setenv("TRADE_DATA_API_KEY", "k")
-    assert TimelineClient.from_env(service="finance-ops").configured
+    monkeypatch.setenv("WORK_TIMELINE_BASE_URL", "http://timeline.test")
+    monkeypatch.setenv("WORK_TIMELINE_API_KEY", "k")
+    assert TimelineClient.from_env(service="ci-runner").configured
 
 
 def test_an_unknown_client_kind_is_refused_at_construction() -> None:

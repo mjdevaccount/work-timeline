@@ -1,0 +1,20 @@
+# Run in CI (ci.yml, lint job) and locally after `uv run pre-commit install`.
+repos:
+  - repo: local
+    hooks:
+      # The package, its tests and its docs describe a generic library. Deployment detail (the
+      # systems that use it, their hosts, incident dates) does not belong in them: what changed goes
+      # in CHANGELOG.md and why in docs/adr/ (CONTRIBUTING.md).
+      - id: no-deployment-vocabulary
+        name: no deployment vocabulary
+        language: pygrep
+        args: [--ignore-case]
+        entry: '\bedge\b|edge[-_]host|\bbox\b|trade|tradier|\bspy\b|\btickers?\b|\bmarkets?\b|finance|quant|\b(?:10|192\.168)\.\d+\.\d+\.\d+\b'
+        files: ^(src/|tests/|docs/|README\.md$|CLAUDE\.md$|CONTRIBUTING\.md$|CHANGELOG\.md$)
+      # Dated history belongs in CHANGELOG.md and the ADRs, never in a docstring or comment.
+      - id: no-dates-in-package
+        name: no dates in the package
+        language: pygrep
+        entry: '20\d\d-\d\d-\d\d'
+        files: ^src/work_timeline/
+        types: [python]
